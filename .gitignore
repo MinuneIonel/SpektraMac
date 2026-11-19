@@ -8,3 +8,4 @@ __pycache__/
 golden/*
 !golden/manifest.json
 !golden/manifest-bw.json
+build/

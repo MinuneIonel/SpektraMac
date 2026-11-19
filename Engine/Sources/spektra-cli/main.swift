@@ -15,15 +15,36 @@ case "save":
     // spektra-cli save <photo> <file.jpg|png|tiff> [lens | enlarger] [--film <stock>]: saves the photo
     // as the app does, timed.
     var paths = Array(arguments.dropFirst())
-    var film: String?
-    if let option = paths.firstIndex(of: "--film") {
-        guard option + 1 < paths.count else { usage() }
-        film = paths[option + 1]
-        paths.removeSubrange(option...option + 1)
+    func option(_ name: String) -> String? {
+        guard let index = paths.firstIndex(of: name) else { return nil }
+        guard index + 1 < paths.count else { usage() }
+        defer { paths.removeSubrange(index...index + 1) }
+        return paths[index + 1]
     }
+    let film = option("--film")
+    let preset = option("--preset").map { URL(filePath: $0) }
+    let ev = option("--ev").map { Double($0) ?? { usage() }() }
     let diffusion = paths.count == 3 ? paths[2] : nil
     guard paths.count == 2 || ["lens", "enlarger"].contains(diffusion) else { usage() }
-    try await save(URL(filePath: paths[0]), to: URL(filePath: paths[1]), film: film, diffusion: diffusion)
+    try await save(URL(filePath: paths[0]), to: URL(filePath: paths[1]), film: film, preset: preset, ev: ev,
+                   diffusion: diffusion)
+case "preset":
+    // spektra-cli preset <file.json> [--film <stock>]: writes the default settings, or what choosing
+    // `stock` sets, as a preset, as the app's Save Preset does, to edit or pass to save --preset.
+    var rest = Array(arguments.dropFirst())
+    var controls = Controls()
+    if let index = rest.firstIndex(of: "--film") {
+        guard index + 1 < rest.count else { usage() }
+        let films = try Engine().films
+        guard films.contains(where: { $0.stock == rest[index + 1] }) else {
+            print("No film \(rest[index + 1]). Films: \(films.map(\.stock).joined(separator: ", "))")
+            exit(1)
+        }
+        controls = controls.choosing(film: rest[index + 1], from: films)
+        rest.removeSubrange(index...index + 1)
+    }
+    guard rest.count == 1 else { usage() }
+    try controls.preset().write(to: URL(filePath: rest[0]))
 case "benchmark":
     if let path = arguments.dropFirst().first, Int(path) == nil {
         // spektra-cli benchmark <photo>: times the app's renders of a photo (the README's figures).
@@ -44,6 +65,8 @@ func usage() -> Never {
     print("""
         Usage: spektra-cli benchmark [width height | photo]
                spektra-cli save <photo> <file.jpg|png|tiff> [lens | enlarger] [--film <stock>]
+                                [--preset <file.json>] [--ev <stops>]
+               spektra-cli preset <file.json> [--film <stock>]
                spektra-cli photo <width> <height> <file.jpg>
         """)
     exit(1)
@@ -55,12 +78,31 @@ func usage() -> Never {
 /// settings (Portra 400 printed on Portra Endura), or what choosing `film` sets
 /// (tools/looks.sh), with the default diffusion filter (Black Pro-Mist 1/2) on the `lens` or the
 /// `enlarger` if asked. tools/benchmark.sh reads the process's peak memory footprint.
-func save(_ url: URL, to destination: URL, film: String?, diffusion: String?) async throws {
+///
+/// A `preset` (as the app's Save Preset writes) sets every control instead, checked as the app
+/// checks one; `film` then picks a film on top of it. `ev` is the exposure in stops over the photo
+/// as shot, which a preset doesn't carry. The photo's EXIF, GPS and IPTC are kept, as the app keeps
+/// them, and `destination` may be the photo itself: it's decoded before the render is written.
+func save(_ url: URL, to destination: URL, film: String?, preset: URL?, ev: Double?,
+          diffusion: String?) async throws {
     guard let type = UTType(filenameExtension: destination.pathExtension),
           [UTType.jpeg, .png, .tiff].contains(where: { type.conforms(to: $0) }) else { usage() }
     let engine = try Engine()
+    let metadata = PhotoMetadata(contentsOf: url)
     _ = try await engine.open(RGBImage.decode(contentsOf: url))
     var controls = Controls()
+    if let preset {
+        controls = try Controls(preset: Data(contentsOf: preset))
+        guard engine.films.contains(where: { $0.stock == controls.film }),
+              engine.papers.contains(where: { $0.stock == controls.paper }) else {
+            print("Unknown film or paper in \(preset.lastPathComponent): \(controls.film), \(controls.paper)")
+            exit(1)
+        }
+        controls = controls.checked(films: engine.films).controls
+    }
+    if let ev {
+        controls.exposureEV = ev
+    }
     if let film {
         guard engine.films.contains(where: { $0.stock == film }) else {
             print("No film \(film). Films: \(engine.films.map(\.stock).joined(separator: ", "))")
@@ -68,13 +110,22 @@ func save(_ url: URL, to destination: URL, film: String?, diffusion: String?) as
         }
         controls = controls.choosing(film: film, from: engine.films)
     }
-    controls.cameraDiffusion.active = diffusion == "lens"
-    controls.enlargerDiffusion.active = diffusion == "enlarger"
+    if let diffusion {
+        controls.cameraDiffusion.active = diffusion == "lens"
+        controls.enlargerDiffusion.active = diffusion == "enlarger"
+    }
     _ = try await engine.render(controls: controls, mode: .preview)
     let start = ContinuousClock.now
     let image = try await engine.export(controls: controls, as: type)
-    try image.write(to: destination, as: type, metadata: nil,
-                    record: EditRecord(software: "spektra-cli", summary: "", keywords: [], controls: controls))
+    let record = EditRecord(software: "spektra-cli",
+                            summary: controls.scanFilm ? "\(controls.film), scanned" : "\(controls.film) printed on \(controls.paper)",
+                            keywords: (controls.scanFilm ? [controls.film] : [controls.film, controls.paper]) + ["SpektraMac"],
+                            controls: controls)
+    if FileManager.default.fileExists(atPath: destination.path) {
+        try image.overwrite(destination, as: type, metadata: metadata, record: record)
+    } else {
+        try image.write(to: destination, as: type, metadata: metadata, record: record)
+    }
     // Plain milliseconds, for the script to read in any locale.
     print("save: \(Int(((ContinuousClock.now - start) / .milliseconds(1)).rounded())) ms")
 }

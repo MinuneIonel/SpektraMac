@@ -308,6 +308,7 @@ final class PhotoModel {
                     throw error
                 }
                 self.metadata = metadata
+                source = url
                 // Every photo opens as shot, with nothing to undo: the last photo's changes were its
                 // own, and Undo would bring its exposure back with them.
                 undoManager?.removeAllActions()
@@ -729,6 +730,50 @@ final class PhotoModel {
                 } catch {
                     fail("Couldn't save “\(url.lastPathComponent)”", error, alert: true)
                 }
+            }
+        }
+    }
+
+    /// The file the open photo came from, for Save Back.
+    private(set) var source: URL?
+
+    /// The format Save Back writes the source in: its own, if that's a 16-bit-capable TIFF or PNG.
+    /// RAW, HEIC and JPEG originals are never written over.
+    private var saveBackType: UTType? {
+        guard let source, let type = UTType(filenameExtension: source.pathExtension) else { return nil }
+        return [UTType.tiff, .png].first { type.conforms(to: $0) && !type.conforms(to: .rawImage) }
+    }
+
+    var canSaveBack: Bool { canSave && saveBackType != nil }
+
+    /// Renders the photo at full resolution and writes it over the file it came from, in that file's
+    /// format, 16-bit: the round trip for an app that hands SpektraMac a TIFF to edit, such as Capture
+    /// One's Edit With, which picks up the change. Written in place (``CGImage/overwrite(_:as:metadata:record:)``)
+    /// as the sandbox gives the app that file and not its folder.
+    func saveBack() {
+        guard canSaveBack, let source, let type = saveBackType, let engine else { return }
+        let (controls, metadata, record) = (controls, metadata, editRecord)
+        savePhase = "Rendering \(source.lastPathComponent) at full resolution…"
+        saveTask = Task {
+            defer { savePhase = nil; saveTask = nil }
+            let scoped = source.startAccessingSecurityScopedResource()
+            defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+            do {
+                let (image, rendering) = try await EngineTime.measure(on: engine) {
+                    try $0.export(controls: controls, as: type)
+                }
+                try Task.checkCancellation()
+                savePhase = "Writing \(source.lastPathComponent)…"
+                let writing = ContinuousClock.now
+                try await Task.detached(priority: .userInitiated) {
+                    try image.overwrite(source, as: type, metadata: metadata, record: record)
+                }.value
+                let time = EngineTime(waited: rendering.waited, took: rendering.took + (.now - writing))
+                note("Saved back to \(source.lastPathComponent) \(time.formatted([.seconds, .milliseconds]))")
+            } catch is CancellationError {
+                note("Cancelled saving back to \(source.lastPathComponent)")
+            } catch {
+                fail("Couldn't save back to “\(source.lastPathComponent)”", error, alert: true)
             }
         }
     }

@@ -136,7 +136,26 @@ extension CGImage {
     /// with grain. The file embeds the image's colour space's ICC profile, `metadata`, marked
     /// upright since the pixels are, and `record`.
     public func write(to url: URL, as type: UTType, metadata: PhotoMetadata?, record: EditRecord) throws {
-        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil)
+        try encoded(as: type, metadata: metadata, record: record, for: url).write(to: url)
+    }
+
+    /// Writes the image over the file at `url` in place, as ``write(to:as:metadata:record:)``
+    /// encodes it: the file is truncated and rewritten, not replaced, so no temporary file is made
+    /// beside it. A sandboxed app given only that file (as Capture One's Edit With gives one) can
+    /// write it, and the app that gave it sees the same file change.
+    public func overwrite(_ url: URL, as type: UTType, metadata: PhotoMetadata?, record: EditRecord) throws {
+        let data = try encoded(as: type, metadata: metadata, record: record, for: url)
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: data)
+        try handle.synchronize()
+    }
+
+    /// The encoded file ``write(to:as:metadata:record:)`` writes; `url` names it in errors.
+    func encoded(as type: UTType, metadata: PhotoMetadata?, record: EditRecord, for url: URL) throws -> Data {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil)
         else { throw EncodeError(url: url) }
         var properties = metadata?.properties ?? [:]
         properties[kCGImagePropertyOrientation] = 1
@@ -168,6 +187,7 @@ extension CGImage {
         }
         CGImageDestinationAddImageAndMetadata(destination, self, settings, properties as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { throw EncodeError(url: url) }
+        return data as Data
     }
 
     /// `value`'s stored properties by name, for the XMP: a struct's (a diffusion filter's) by its name

@@ -73,7 +73,8 @@ film itself) and its scan.
   </tr>
 </table>
 
-The [user guide](docs/guide.md) explains every film, paper and control.
+The [user guide](docs/guide.md) explains every film, paper and control. [Using SpektraMac with
+Capture One](docs/capture-one.md) covers Edit With and Save Back, and a droplet for batches.
 
 ## Speed
 
