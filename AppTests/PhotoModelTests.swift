@@ -158,6 +158,60 @@ final class PhotoModelTests {
         #expect(model.controls == before)
     }
 
+    // MARK: Copy and paste a look
+
+    /// Copy Look on one model and Paste Look on another carry every control but the exposure, which
+    /// stays each photo's, as one undo step; the look is also on the pasteboard as a preset's JSON.
+    @Test func pastedLookKeepsThePhotosExposure() async throws {
+        let pasteboard = NSPasteboard(name: .init("PhotoModelTests-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        // One model, as the app has: copy a look, move on to other settings and another exposure,
+        // as for the next photo, and paste. (Two models at once, each with an engine, hang.)
+        let model = try await makeModel(pasteboard: pasteboard)
+        let undoManager = UndoManager()
+        undoManager.groupsByEvent = false
+        model.undoManager = undoManager
+        event(undoManager) {
+            model.controls = model.controls.choosing(film: "kodak_ektar_100", from: model.films)
+            model.controls.printContrast = 1.3
+            model.controls.exposureEV = 1.5
+        }
+        model.copyLook()
+        let text = try #require(pasteboard.string(forType: .string))
+        #expect(try Controls(preset: Data(text.utf8)).film == "kodak_ektar_100")
+
+        event(undoManager) { model.restoreFactoryDefaults() }
+        event(undoManager) { model.controls.exposureEV = -0.7 }
+        event(undoManager) { model.pasteLook() }
+        #expect(model.failure == nil)
+        #expect(model.controls.film == "kodak_ektar_100")
+        #expect(model.controls.printContrast == 1.3)
+        #expect(model.controls.exposureEV == -0.7)
+        #expect(undoManager.undoActionName == "Paste Look")
+    }
+
+    /// Paste Look with no look on the pasteboard, or text that isn't one, changes nothing and shows
+    /// no alert; a look naming a film the app doesn't have is refused with one.
+    @Test func pasteLookWithoutALookChangesNothing() async throws {
+        let pasteboard = NSPasteboard(name: .init("PhotoModelTests-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        let model = try await makeModel(pasteboard: pasteboard)
+        let before = model.controls
+        pasteboard.clearContents()
+        pasteboard.setString("Portra, please", forType: .string)
+        model.pasteLook()
+        #expect(model.failure == nil)
+        #expect(model.controls == before)
+
+        var unknown = Controls()
+        unknown.film = "kodak_unknown_100"
+        pasteboard.clearContents()
+        pasteboard.setData(try unknown.preset(), forType: PhotoModel.lookType)
+        model.pasteLook()
+        #expect(model.failure?.title == "Couldn't paste the look.")
+        #expect(model.controls == before)
+    }
+
     // MARK: Exposure
 
     /// The exposure is the photo's: a film's saved defaults and a preset leave it as it is, and
@@ -385,8 +439,8 @@ final class PhotoModelTests {
     // MARK: Helpers
 
     /// A model as the app makes one, once its engine is there, with the tests' settings.
-    private func makeModel() async throws -> PhotoModel {
-        let model = PhotoModel(defaults: defaults, addsToRecentPhotos: false)
+    private func makeModel(pasteboard: NSPasteboard = NSPasteboard(name: .init("PhotoModelTests-unused"))) async throws -> PhotoModel {
+        let model = PhotoModel(defaults: defaults, addsToRecentPhotos: false, pasteboard: pasteboard)
         try await until { !model.films.isEmpty }
         return model
     }

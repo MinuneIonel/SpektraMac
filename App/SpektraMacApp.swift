@@ -43,6 +43,17 @@ struct SpektraMacApp: App {
                     .keyboardShortcut(".", modifiers: .command)
                     .disabled(!model.canCancel)
             }
+            // After Edit's Cut, Copy and Paste: the look is every control but the exposure.
+            CommandGroup(after: .pasteboard) {
+                Divider()
+                Group {
+                    Button("Copy Look", systemImage: "doc.on.doc") { model.copyLook() }
+                        .keyboardShortcut("c", modifiers: [.command, .option])
+                    Button("Paste Look", systemImage: "doc.on.clipboard") { model.pasteLook() }
+                        .keyboardShortcut("v", modifiers: [.command, .option])
+                }
+                .disabled(!model.canUseLooks)
+            }
             InspectorCommands()
             ViewCommands(model: model)
             // The user guide on GitHub: there's no help book.

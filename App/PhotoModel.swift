@@ -223,9 +223,10 @@ final class PhotoModel {
     /// Whether an opened photo goes to ``recentPhotos``: the tests' photos don't.
     private let addsToRecentPhotos: Bool
 
-    init(defaults: UserDefaults = .standard, addsToRecentPhotos: Bool = true) {
+    init(defaults: UserDefaults = .standard, addsToRecentPhotos: Bool = true, pasteboard: NSPasteboard = .general) {
         self.defaults = defaults
         self.addsToRecentPhotos = addsToRecentPhotos
+        self.pasteboard = pasteboard
         let making = Task.detached(priority: .userInitiated) { try Engine() }
         makingEngine = making
         Task {
@@ -932,21 +933,70 @@ final class PhotoModel {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
-            let preset = try Controls(preset: Data(contentsOf: url))
-            guard knowsStocks(of: preset) else {
-                throw CocoaError(.fileReadCorruptFile, userInfo: [
-                    NSLocalizedDescriptionKey: "Unknown film or paper (\(preset.film), \(preset.paper))",
-                ])
-            }
-            actionName = "Open Preset"
-            var opened = checked(preset, from: url.lastPathComponent)
-            // A preset carries no exposure (``Controls/preset()``): it stays the photo's.
-            opened.exposureEV = controls.exposureEV
-            controls = opened
-            actionName = nil
+            try apply(preset: Data(contentsOf: url), from: url.lastPathComponent, as: "Open Preset")
             note("Opened preset \(url.lastPathComponent)")
         } catch {
             fail("Couldn't open the preset", error, alert: true)
+        }
+    }
+
+    /// Sets the controls to `preset`'s, checked, as one undo step named `action`. Throws, changing
+    /// nothing, if it isn't a preset or names a film or paper the app doesn't have.
+    private func apply(preset data: Data, from source: String, as action: String) throws {
+        let preset = try Controls(preset: data)
+        guard knowsStocks(of: preset) else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [
+                NSLocalizedDescriptionKey: "Unknown film or paper (\(preset.film), \(preset.paper))",
+            ])
+        }
+        actionName = action
+        var opened = checked(preset, from: source)
+        // A preset carries no exposure (``Controls/preset()``): it stays the photo's.
+        opened.exposureEV = controls.exposureEV
+        controls = opened
+        actionName = nil
+    }
+
+    // MARK: Copy and paste a look
+
+    /// Where Copy Look puts the look and Paste Look takes it from: the general pasteboard, or one of
+    /// the tests' own.
+    @ObservationIgnored private let pasteboard: NSPasteboard
+    /// A look on the pasteboard: a preset's JSON, also put there as plain text.
+    static let lookType = NSPasteboard.PasteboardType("io.github.nainajnahO.SpektraMac.look")
+    /// The menu can't watch the pasteboard, so Paste Look is offered whenever the app is ready and
+    /// beeps if there's no look to paste.
+    var canUseLooks: Bool { engine != nil }
+
+    /// Puts every control but the exposure, which is the photo's, on the pasteboard, as a preset:
+    /// Paste Look sets it on another photo, and pasted as text it's a preset file's JSON.
+    func copyLook() {
+        do {
+            let preset = try controls.preset()
+            pasteboard.clearContents()
+            pasteboard.setData(preset, forType: Self.lookType)
+            pasteboard.setString(String(decoding: preset, as: UTF8.self), forType: .string)
+            note("Copied the look (\(controls.scanFilm ? filmName : "\(filmName) on \(paperName)"))")
+        } catch {
+            fail("Couldn't copy the look", error, alert: true)
+        }
+    }
+
+    /// Sets the look on the pasteboard (Copy Look's, or a preset's JSON copied as text), keeping the
+    /// photo's exposure, as one undo step. Beeps, changing nothing, if the pasteboard holds no look;
+    /// a look naming a film or paper the app doesn't have is refused with an alert.
+    func pasteLook() {
+        let data = pasteboard.data(forType: Self.lookType)
+            ?? pasteboard.string(forType: .string).map { Data($0.utf8) }.flatMap { (try? Controls(preset: $0)) != nil ? $0 : nil }
+        guard let data else {
+            NSSound.beep()
+            return
+        }
+        do {
+            try apply(preset: data, from: "the pasted look", as: "Paste Look")
+            note("Pasted the look (\(controls.scanFilm ? filmName : "\(filmName) on \(paperName)"))")
+        } catch {
+            fail("Couldn't paste the look", error, alert: true)
         }
     }
 

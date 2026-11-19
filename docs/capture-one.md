@@ -40,6 +40,13 @@ Capture One, before sending a photo:
 Save Back is only offered for TIFF and PNG files; a RAW, HEIC or JPEG original is never written
 over. **File › Save…** still saves a copy anywhere, as before.
 
+## Copy a look to the next photo
+
+**Edit › Copy Look** (⌥⌘C) puts every setting but the exposure on the clipboard; on the next
+photo, after Edit With, **Edit › Paste Look** (⌥⌘V) sets it, keeping that photo's own exposure,
+and Edit › Undo takes it back. The copied look is also a preset's JSON as text, so it can be pasted
+into a file, and a preset's JSON copied as text pastes as a look.
+
 ## SpektraDroplet (batches)
 
 Build it once (`tools/capture-one/make-droplet.sh` writes `build/SpektraDroplet.app`; move it to
@@ -55,8 +62,12 @@ Build it once (`tools/capture-one/make-droplet.sh` writes `build/SpektraDroplet.
    notification. The rendered files stay in the recipe's output folder; import them if you want
    them in the catalog.
 
+To render photos as variants in the catalog instead, select them and choose **Edit With… ›
+SpektraDroplet** (TIFF, 16 bit, ProPhoto RGB): Capture One makes a TIFF variant of each and the
+droplet renders each in place. (Not yet tried with several photos at once.)
+
 The droplet uses one preset and one exposure for every photo. For photos that need their own
-exposure, use Edit With.
+exposure, use Edit With and SpektraMac, with Copy Look and Paste Look.
 
 ## Command line
 
