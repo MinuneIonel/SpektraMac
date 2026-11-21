@@ -12,7 +12,8 @@ bin="$(swift build -c release --package-path Engine --show-bin-path)"
 app="$out/SpektraDroplet.app"
 rm -rf "$app"
 mkdir -p "$out"
-osacompile -o "$app" tools/capture-one/SpektraDroplet.applescript
+# -s: stay open, so photos Capture One sends while it works aren't lost (see the script).
+osacompile -s -o "$app" tools/capture-one/SpektraDroplet.applescript
 # The CLI finds its shaders and profiles in the resource bundle beside it (Bundle.module).
 mkdir -p "$app/Contents/Resources/spektra"
 cp "$bin/spektra-cli" "$app/Contents/Resources/spektra/"
